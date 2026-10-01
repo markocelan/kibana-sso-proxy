@@ -191,6 +191,7 @@ The proxy provides flexible mapping from OIDC provider roles to Elasticsearch ro
 | `ES_ROLE_SUFFIX_STRIP` | Suffix to strip from provider roles | `` |
 | `ES_ROLE_PREFIX_ADD` | Prefix to add to all mapped roles | `` |
 | `ES_ROLE_CASE_SENSITIVE` | Case-sensitive role matching | `false` |
+| `ES_USER_MAPPING` | JSON mapping of usernames to ES roles, added on top of `ES_ROLE_MAPPING` | `{}` |
 
 #### Mapping Process
 
@@ -201,8 +202,9 @@ The role mapper processes provider roles in this order:
 3. **Apply regex mapping** - Match keys prefixed with `regex:`
 4. **Passthrough** - If enabled, unmapped roles pass through directly
 5. **Add prefix** - Apply `ES_ROLE_PREFIX_ADD` to all mapped roles
-6. **Always include** - Add `ES_ROLE_ALWAYS_INCLUDE` roles
-7. **Default fallback** - Use `ES_DEFAULT_ROLES` if no roles mapped
+6. **Apply user mapping** - Match the username against `ES_USER_MAPPING` (also supports `regex:` keys) and add any matched roles on top of the above - it does not replace roles resolved from group/role mapping
+7. **Always include** - Add `ES_ROLE_ALWAYS_INCLUDE` roles
+8. **Default fallback** - Use `ES_DEFAULT_ROLES` if no roles mapped
 
 #### Basic Example
 
@@ -252,6 +254,16 @@ ES_DEFAULT_ROLES='["viewer"]'
 ES_ROLE_ALWAYS_INCLUDE='["kibana_user"]'
 ES_ROLE_PREFIX_STRIP="prefix_"
 ES_ROLE_CASE_SENSITIVE=false
+```
+
+**Per-User Mapping (e.g. Entra ID break-glass access):**
+```bash
+# Grant alice superuser regardless of her Entra ID group membership,
+# on top of whatever her groups already resolve to via ES_ROLE_MAPPING
+ES_USER_MAPPING='{"alice": ["superuser"]}'
+
+# Regex patterns are supported too
+ES_USER_MAPPING='{"regex:svc-.*": ["service_account"]}'
 ```
 
 #### Default Role Mapping

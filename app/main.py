@@ -178,7 +178,7 @@ def register_routes(app: Flask):
                 "provider_user_id": user_info.user_id,
                 "email": user_info.email,
                 "full_name": user_info.full_name,
-                "roles": es_service.map_roles(user_info.roles),
+                "roles": es_service.map_roles(user_info.roles, user_info.username),
             }
 
             # Get redirect URL

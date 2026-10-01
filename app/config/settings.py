@@ -112,6 +112,12 @@ class ElasticsearchConfig:
             Example: "sso_" would transform "admin" to "sso_admin"
 
         role_case_sensitive: Whether role matching is case-sensitive (default: false)
+
+        user_mapping: Direct mapping from usernames to ES roles (JSON object)
+            Example: {"alice": ["superuser"], "bob": ["editor", "viewer"]}
+            Supports regex patterns with "regex:" prefix, same as role_mapping.
+            Matched roles are added on top of whatever role_mapping resolves
+            (e.g. from Entra ID group membership), not a replacement for it.
     """
 
     url: str = "http://localhost:9200"
@@ -128,6 +134,9 @@ class ElasticsearchConfig:
     role_suffix_strip: str = ""
     role_prefix_add: str = ""
     role_case_sensitive: bool = False
+
+    # Username -> ES roles mapping (additive, on top of role_mapping)
+    user_mapping: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -266,6 +275,10 @@ def load_config() -> Config:
         ES_ROLE_SUFFIX_STRIP: Suffix to strip from provider roles
         ES_ROLE_PREFIX_ADD: Prefix to add to mapped roles
         ES_ROLE_CASE_SENSITIVE: Case-sensitive matching (true/false)
+        ES_USER_MAPPING: JSON mapping of usernames to ES roles (additive,
+            applied on top of ES_ROLE_MAPPING). Supports "regex:" prefixed
+            keys, same as ES_ROLE_MAPPING. Primarily useful for granting
+            specific SSO users (e.g. Entra ID) roles independent of group sync.
 
         # Kibana
         KIBANA_URL: Internal Kibana URL
@@ -347,6 +360,9 @@ def load_config() -> Config:
             role_prefix_add=os.environ.get("ES_ROLE_PREFIX_ADD", ""),
             role_case_sensitive=_parse_bool(
                 os.environ.get("ES_ROLE_CASE_SENSITIVE", "false")
+            ),
+            user_mapping=_parse_json(
+                os.environ.get("ES_USER_MAPPING", ""), {}
             ),
         ),
         kibana=KibanaConfig(
