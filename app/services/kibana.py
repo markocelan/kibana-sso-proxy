@@ -73,6 +73,7 @@ class KibanaService:
                 },
                 headers={
                     "kbn-xsrf": "true",
+                    "x-elastic-internal-origin": "Kibana",
                     "Content-Type": "application/json",
                 },
                 verify=self.config.verify_ssl,
