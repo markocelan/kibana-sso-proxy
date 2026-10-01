@@ -33,6 +33,8 @@ class RoleMapper:
         ES_ROLE_SUFFIX_STRIP: Suffix to strip from provider roles
         ES_ROLE_PREFIX_ADD: Prefix to add to mapped roles
         ES_ROLE_CASE_SENSITIVE: Case-sensitive role matching (true/false)
+        ES_USER_MAPPING: JSON object mapping usernames to ES roles, added on
+            top of whatever ES_ROLE_MAPPING resolves
     """
 
     def __init__(self, config: ElasticsearchConfig):
@@ -49,10 +51,14 @@ class RoleMapper:
             self.role_mapping = {
                 k.lower(): v for k, v in config.role_mapping.items()
             }
+            self.user_mapping = {
+                k.lower(): v for k, v in config.user_mapping.items()
+            }
         else:
             self.role_mapping = config.role_mapping
+            self.user_mapping = config.user_mapping
 
-    def map_roles(self, provider_roles: list[str]) -> list[str]:
+    def map_roles(self, provider_roles: list[str], username: str | None = None) -> list[str]:
         """
         Map provider roles to Elasticsearch roles.
 
@@ -61,11 +67,13 @@ class RoleMapper:
         2. Apply direct role mapping
         3. If no mapping found and passthrough enabled, use the role directly
         4. Add prefix to mapped roles if configured
-        5. Add always-include roles
-        6. If still empty, use default roles
+        5. Apply direct username mapping (ES_USER_MAPPING), added on top
+        6. Add always-include roles
+        7. If still empty, use default roles
 
         Args:
             provider_roles: List of roles from the OIDC provider
+            username: Optional username to check against ES_USER_MAPPING
 
         Returns:
             List of Elasticsearch roles
@@ -78,7 +86,7 @@ class RoleMapper:
             processed_role = self._strip_affixes(role)
 
             # Step 2: Apply direct mapping
-            mapped = self._apply_mapping(processed_role)
+            mapped = self._lookup(processed_role, self.role_mapping)
 
             if mapped:
                 mapped_count += 1
@@ -90,16 +98,25 @@ class RoleMapper:
                 es_roles.add(self._add_prefix(processed_role))
                 logger.debug(f"Passing through unmapped role: {role} -> {processed_role}")
 
-        # Step 5: Add always-include roles
+        # Step 5: Apply direct username mapping, additive
+        if username:
+            user_mapped = self._lookup(username, self.user_mapping)
+            if user_mapped:
+                mapped_count += 1
+                for r in user_mapped:
+                    es_roles.add(self._add_prefix(r))
+                logger.debug(f"Mapped username {username} to roles: {user_mapped}")
+
+        # Step 6: Add always-include roles
         es_roles.update(self.config.role_always_include)
 
-        # Step 6: Use defaults if nothing mapped
+        # Step 7: Use defaults if nothing mapped
         if not es_roles:
             es_roles.update(self.config.default_roles)
             logger.debug(f"No roles mapped, using defaults: {self.config.default_roles}")
 
         result = list(es_roles)
-        logger.info(f"Role mapping: {provider_roles} -> {result}")
+        logger.info(f"Role mapping: {provider_roles} (user={username}) -> {result}")
         return result
 
     def _strip_affixes(self, role: str) -> str:
@@ -130,29 +147,31 @@ class RoleMapper:
             return f"{self.config.role_prefix_add}{role}"
         return role
 
-    def _apply_mapping(self, role: str) -> list[str] | None:
+    def _lookup(self, key: str, mapping: dict) -> list[str] | None:
         """
-        Apply role mapping rules.
+        Look up a key (role or username) in a mapping dict.
+
+        Supports direct matches and "regex:"-prefixed pattern keys.
 
         Returns:
             List of mapped ES roles, or None if no mapping found
         """
         # Determine the key to look up
-        lookup_key = role if self.config.role_case_sensitive else role.lower()
+        lookup_key = key if self.config.role_case_sensitive else key.lower()
 
         # Direct mapping
-        if lookup_key in self.role_mapping:
-            mapped = self.role_mapping[lookup_key]
+        if lookup_key in mapping:
+            mapped = mapping[lookup_key]
             if isinstance(mapped, list):
                 return mapped
             return [mapped]
 
         # Regex mapping (keys starting with "regex:")
-        for key, value in self.role_mapping.items():
-            if key.startswith("regex:"):
-                pattern = key[6:]  # Remove "regex:" prefix
+        for pattern_key, value in mapping.items():
+            if pattern_key.startswith("regex:"):
+                pattern = pattern_key[6:]  # Remove "regex:" prefix
                 flags = 0 if self.config.role_case_sensitive else re.IGNORECASE
-                if re.match(pattern, role, flags):
+                if re.match(pattern, key, flags):
                     if isinstance(value, list):
                         return value
                     return [value]
@@ -345,17 +364,18 @@ class ElasticsearchService:
         )
         return False
 
-    def map_roles(self, provider_roles: list[str]) -> list[str]:
+    def map_roles(self, provider_roles: list[str], username: str | None = None) -> list[str]:
         """
         Map provider roles to Elasticsearch roles.
 
         Args:
             provider_roles: List of roles from the OIDC provider
+            username: Optional username to check against ES_USER_MAPPING
 
         Returns:
             List of Elasticsearch roles
         """
-        return self._role_mapper.map_roles(provider_roles)
+        return self._role_mapper.map_roles(provider_roles, username)
 
     def sync_user(
         self,
@@ -383,7 +403,7 @@ class ElasticsearchService:
         Returns:
             Tuple of (username, password_was_updated)
         """
-        es_roles = self.map_roles(provider_roles)
+        es_roles = self.map_roles(provider_roles, username)
         user_exists = self.check_user_exists(username)
 
         if not user_exists:
